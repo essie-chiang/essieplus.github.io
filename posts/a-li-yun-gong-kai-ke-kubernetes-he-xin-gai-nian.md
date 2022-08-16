@@ -1,5 +1,5 @@
 ---
-title: '阿里云公开课 - Kubernetes 核心概念'
+title: '阿里云公开课 - 3 - Kubernetes 核心概念'
 date: 2022-08-16 13:18:17
 tags: []
 published: true
