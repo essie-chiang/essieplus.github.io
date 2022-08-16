@@ -1,0 +1,27 @@
+{
+  "config": {
+    "branch": "main",
+    "domain": "https://essieplus.github.io",
+    "email": "essie-chiang@proton.me",
+    "platform": "github",
+    "privateKey": "",
+    "repository": "essieplus.github.io",
+    "token": "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",
+    "username": "essieplus"
+  },
+  "comment": {
+    "commentPlatform": "gitalk",
+    "disqusSetting": {
+      "api": "",
+      "apikey": "",
+      "shortname": ""
+    },
+    "gitalkSetting": {
+      "clientId": "",
+      "clientSecret": "",
+      "owner": "",
+      "repository": ""
+    },
+    "showComment": false
+  }
+}

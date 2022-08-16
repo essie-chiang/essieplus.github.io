@@ -1,0 +1,299 @@
+{
+  "posts": [
+    {
+      "content": "本文整理自 CNCF 和阿里巴巴联合举办的云原生技术公开课的课时 4：理解 Pod 和容器设计模式。本次课程中，阿阿里巴巴高级技术专家、CNCF 官方大使张磊为大家介绍了为什么我们需要 Pod、Pod 的实现机制以及详解容器设计模式等，精彩不容错过。\n\n本次课程的分享主要围绕以下三个部分：\n\n为什么需要 Pod；\nPod 的实现机制；\n详解容器设计模式。\n一、为什么需要 Pod\n容器的基本概念\n现在来看第一个问题：为什么需要 Pod？我们知道 Pod 是 Kubernetes 项目里面一个非常重要的概念，也是非常重要的一个原子调度单位，但是为什么我们会需要这样一个概念呢？我们在使用容器 Docker 的时候，也没有这个说法。其实如果要理解 Pod，我们首先要理解容器，所以首先来回顾一下容器的概念：\n\n容器的本质实际上是一个进程，是一个视图被隔离，资源受限的进程。\n\n容器里面 PID=1 的进程就是应用本身，这意味着管理虚拟机等于管理基础设施，因为我们是在管理机器，但管理容器却等于直接管理应用本身。这也是之前说过的不可变基础设施的一个最佳体现，这个时候，你的应用就等于你的基础设施，它一定是不可变的。\n\n在以上面的例子为前提的情况下，Kubernetes 又是什么呢？我们知道，很多人都说 Kubernetes 是云时代的操作系统，这个非常有意思，因为如果以此类推，容器镜像就是这个操作系统的软件安装包，它们之间是这样的一个类比关系。\n\n\n\n真实操作系统里的例子\n如果说 Kubernetes 就是操作系统的话，那么我们不妨看一下真实的操作系统的例子。\n\n例子里面有一个程序叫做 Helloworld，这个 Helloworld 程序实际上是由一组进程组成的，需要注意一下，这里说的进程实际上等同于 Linux 中的线程。\n\n因为 Linux 中的线程是轻量级进程，所以如果从 Linux 系统中去查看 Helloworld 中的 pstree，将会看到这个 Helloworld 实际上是由四个线程组成的，分别是 {api、main、log、compute}。也就是说，四个这样的线程共同协作，共享 Helloworld 程序的资源，组成了 Helloworld 程序的真实工作情况。\n\n这是操作系统里面进程组或者线程组中一个非常真实的例子，以上就是进程组的一个概念。\n\n\n\n那么大家不妨思考一下，在真实的操作系统里面，一个程序往往是根据进程组来进行管理的。Kubernetes 把它类比为一个操作系统，比如说 Linux。针对于容器我们前面提到可以类比为进程，就是前面的 Linux 线程。那么 Pod 又是什么呢？实际上 Pod 就是我们刚刚提到的进程组，也就是 Linux 里的线程组。\n\n进程组概念\n说到进程组，首先建议大家至少有个概念上的理解，然后我们再详细的解释一下。\n\n还是前面那个例子：Helloworld 程序由四个进程组成，这些进程之间会共享一些资源和文件。那么现在有一个问题：假如说现在把 Helloworld 程序用容器跑起来，你会怎么去做？\n\n当然，最自然的一个解法就是，我现在就启动一个 Docker 容器，里面运行四个进程。可是这样会有一个问题，这种情况下容器里面 PID=1 的进程该是谁? 比如说，它应该是我的 main 进程，那么问题来了，“谁”又负责去管理剩余的 3 个进程呢？\n\n这个核心问题在于，容器的设计本身是一种“单进程”模型，不是说容器里只能起一个进程，由于容器的应用等于进程，所以只能去管理 PID=1 的这个进程，其他再起来的进程其实是一个托管状态。 所以说服务应用进程本身就具有“进程管理”的能力。\n\n比如说 Helloworld 的程序有 system 的能力，或者直接把容器里 PID=1 的进程直接改成 systemd，否则这个应用，或者是容器是没有办法去管理很多个进程的。因为 PID=1 进程是应用本身，如果现在把这个 PID=1 的进程给 kill 了，或者它自己运行过程中死掉了，那么剩下三个进程的资源就没有人回收了，这个是非常非常严重的一个问题。\n\n而反过来真的把这个应用本身改成了 systemd，或者在容器里面运行了一个 systemd，将会导致另外一个问题：使得管理容器，不再是管理应用本身了，而等于是管理 systemd，这里的问题就非常明显了。比如说我这个容器里面 run 的程序或者进程是 systemd，那么接下来，这个应用是不是退出了？是不是 fail 了？是不是出现异常失败了？实际上是没办法直接知道的，因为容器管理的是 systemd。这就是为什么在容器里面运行一个复杂程序往往比较困难的一个原因。\n\n这里再帮大家梳理一下：由于容器实际上是一个“单进程”模型，所以如果你在容器里启动多个进程，只有一个可以作为 PID=1 的进程，而这时候，如果这个 PID=1 的进程挂了，或者说失败退出了，那么其他三个进程就会自然而然的成为孤儿，没有人能够管理它们，没有人能够回收它们的资源，这是一个非常不好的情况。\n\n注意：Linux 容器的“单进程”模型，指的是容器的生命周期等同于 PID=1 的进程（容器应用进程）的生命周期，而不是说容器里不能创建多进程。当然，一般情况下，容器应用进程并不具备进程管理能力，所以你通过 exec 或者 ssh 在容器里创建的其他进程，一旦异常退出（比如 ssh 终止）是很容易变成孤儿进程的。\n\n反过来，其实可以在容器里面 run 一个 systemd，用它来管理其他所有的进程。这样会产生第二个问题：实际上没办法直接管理我的应用了，因为我的应用被 systemd 给接管了，那么这个时候应用状态的生命周期就不等于容器生命周期。这个管理模型实际上是非常非常复杂的。\n\n\n\nPod = “进程组”\n在 kubernetes 里面，Pod 实际上正是 kubernetes 项目为你抽象出来的一个可以类比为进程组的概念。\n\n前面提到的，由四个进程共同组成的一个应用 Helloworld，在 Kubernetes 里面，实际上会被定义为一个拥有四个容器的 Pod，这个概念大家一定要非常仔细的理解。\n\n就是说现在有四个职责不同、相互协作的进程，需要放在容器里去运行，在 Kubernetes 里面并不会把它们放到一个容器里，因为这里会遇到两个问题。那么在 Kubernetes 里会怎么去做呢？它会把四个独立的进程分别用四个独立的容器启动起来，然后把它们定义在一个 Pod 里面。\n\n所以当 Kubernetes 把 Helloworld 给拉起来的时候，你实际上会看到四个容器，它们共享了某些资源，这些资源都属于 Pod，所以我们说 Pod 在 Kubernetes 里面只有一个逻辑单位，没有一个真实的东西对应说这个就是 Pod，不会有的。真正起来在物理上存在的东西，就是四个容器。这四个容器，或者说是多个容器的组合就叫做 Pod。并且还有一个概念一定要非常明确，Pod 是 Kubernetes 分配资源的一个单位，因为里面的容器要共享某些资源，所以 Pod 也是 Kubernetes 的原子调度单位。\n\n\n\n上面提到的 Pod 设计，也不是 Kubernetes 项目自己想出来的， 而是早在 Google 研发 Borg 的时候，就已经发现了这样一个问题。这个在 Borg paper 里面有非常非常明确的描述。简单来说 Google 工程师发现在 Borg 下面部署应用时，很多场景下都存在着类似于“进程与进程组”的关系。更具体的是，这些应用之前往往有着密切的协作关系，使得它们必须部署在同一台机器上并且共享某些信息。\n\n以上就是进程组的概念，也是 Pod 的用法。\n\n为什么 Pod 必须是原子调度单位？\n可能到这里大家会有一些问题：虽然了解这个东西是一个进程组，但是为什么要把 Pod 本身作为一个概念抽象出来呢？或者说能不能通过调度把 Pod 这个事情给解决掉呢？为什么 Pod 必须是 Kubernetes 里面的原子调度单位？\n\n下面我们通过一个例子来解释。\n\n假如现在有两个容器，它们是紧密协作的，所以它们应该被部署在一个 Pod 里面。具体来说，第一个容器叫做 App，就是业务容器，它会写日志文件；第二个容器叫做 LogCollector，它会把刚刚 App 容器写的日志文件转发到后端的 ElasticSearch 中。\n\n两个容器的资源需求是这样的：App 容器需要 1G 内存，LogCollector 需要 0.5G 内存，而当前集群环境的可用内存是这样一个情况：Node_A：1.25G 内存，Node_B：2G 内存。\n\n假如说现在没有 Pod 概念，就只有两个容器，这两个容器要紧密协作、运行在一台机器上。可是，如果调度器先把 App 调度到了 Node_A 上面，接下来会怎么样呢？这时你会发现：LogCollector 实际上是没办法调度到 Node_A 上的，因为资源不够。其实此时整个应用本身就已经出问题了，调度已经失败了，必须去重新调度。\n\n\n\n以上就是一个非常典型的成组调度失败的例子。英文叫做：Task co-scheduling 问题，这个问题不是说不能解，在很多项目里面，这样的问题都有解法。\n\n比如说在 Mesos 里面，它会做一个事情，叫做资源囤积（resource hoarding）：即当所有设置了 Affinity 约束的任务都达到时，才开始统一调度，这是一个非常典型的成组调度的解法。\n\n所以上面提到的“App”和“LogCollector”这两个容器，在 Mesos 里面，他们不会说立刻调度，而是等两个容器都提交完成，才开始统一调度。这样也会带来新的问题，首先调度效率会损失，因为需要等待。由于需要等还会有外一个情况会出现，就是产生死锁，就是互相等待的一个情况。这些机制在 Mesos 里都是需要解决的，也带来了额外的复杂度。\n\n另一种解法是 Google 的解法。它在 Omega 系统（就是 Borg 下一代）里面，做了一个非常复杂且非常厉害的解法，叫做乐观调度。比如说：不管这些冲突的异常情况，先调度，同时设置一个非常精妙的回滚机制，这样经过冲突后，通过回滚来解决问题。这个方式相对来说要更加优雅，也更加高效，但是它的实现机制是非常复杂的。这个有很多人也能理解，就是悲观锁的设置一定比乐观锁要简单。\n\n而像这样的一个 Task co-scheduling 问题，在 Kubernetes 里，就直接通过 Pod 这样一个概念去解决了。因为在 Kubernetes 里，这样的一个 App 容器和 LogCollector 容器一定是属于一个 Pod 的，它们在调度时必然是以一个 Pod 为单位进行调度，所以这个问题是根本不存在的。\n\n再次理解 Pod\n在讲了前面这些知识点之后，我们来再次理解一下 Pod，首先 Pod 里面的容器是“超亲密关系”。\n\n这里有个“超”字需要大家理解，正常来说，有一种关系叫做亲密关系，这个亲密关系是一定可以通过调度来解决的。\n\n\n\n比如说现在有两个 Pod，它们需要运行在同一台宿主机上，那这样就属于亲密关系，调度器一定是可以帮助去做的。但是对于超亲密关系来说，有一个问题，即它必须通过 Pod 来解决。因为如果超亲密关系赋予不了，那么整个 Pod 或者说是整个应用都无法启动。\n\n什么叫做超亲密关系呢？大概分为以下几类：\n\n比如说两个进程之间会发生文件交换，前面提到的例子就是这样，一个写日志，一个读日志；\n两个进程之间需要通过 localhost 或者说是本地的 Socket 去进行通信，这种本地通信也是超亲密关系；\n这两个容器或者是微服务之间，需要发生非常频繁的 RPC 调用，出于性能的考虑，也希望它们是超亲密关系；\n两个容器或者是应用，它们需要共享某些 Linux Namespace。最简单常见的一个例子，就是我有一个容器需要加入另一个容器的 Network Namespace。这样我就能看到另一个容器的网络设备，和它的网络信息。\n像以上几种关系都属于超亲密关系，它们都是在 Kubernetes 中会通过 Pod 的概念去解决的。\n\n现在我们理解了 Pod 这样的概念设计，理解了为什么需要 Pod。它解决了两个问题：\n\n我们怎么去描述超亲密关系；\n我们怎么去对超亲密关系的容器或者说是业务去做统一调度，这是 Pod 最主要的一个诉求。\n二、Pod 的实现机制\nPod 要解决的问题\n像 Pod 这样一个东西，本身是一个逻辑概念。那在机器上，它究竟是怎么实现的呢？这就是我们要解释的第二个问题。\n\n既然说 Pod 要解决这个问题，核心就在于如何让一个 Pod 里的多个容器之间最高效的共享某些资源和数据。\n\n因为容器之间原本是被 Linux Namespace 和 cgroups 隔开的，所以现在实际要解决的是怎么去打破这个隔离，然后共享某些事情和某些信息。这就是 Pod 的设计要解决的核心问题所在。\n\n所以说具体的解法分为两个部分：网络和存储。\n\n1.共享网络\n第一个问题是 Pod 里的多个容器怎么去共享网络？下面是个例子：\n\n比如说现在有一个 Pod，其中包含了一个容器 A 和一个容器 B，它们两个就要共享 Network Namespace。在 Kubernetes 里的解法是这样的：它会在每个 Pod 里，额外起一个 Infra container 小容器来共享整个 Pod 的 Network Namespace。\n\nInfra container 是一个非常小的镜像，大概 100~200KB 左右，是一个汇编语言写的、永远处于“暂停”状态的容器。由于有了这样一个 Infra container 之后，其他所有容器都会通过 Join Namespace 的方式加入到 Infra container 的 Network Namespace 中。\n\n所以说一个 Pod 里面的所有容器，它们看到的网络视图是完全一样的。即：它们看到的网络设备、IP地址、Mac地址等等，跟网络相关的信息，其实全是一份，这一份都来自于 Pod 第一次创建的这个 Infra container。这就是 Pod 解决网络共享的一个解法。\n\n在 Pod 里面，一定有一个 IP 地址，是这个 Pod 的 Network Namespace 对应的地址，也是这个 Infra container 的 IP 地址。所以大家看到的都是一份，而其他所有网络资源，都是一个 Pod 一份，并且被 Pod 中的所有容器共享。这就是 Pod 的网络实现方式。\n\n由于需要有一个相当于说中间的容器存在，所以整个 Pod 里面，必然是 Infra container 第一个启动。并且整个 Pod 的生命周期是等同于 Infra container 的生命周期的，与容器 A 和 B 是无关的。这也是为什么在 Kubernetes 里面，它是允许去单独更新 Pod 里的某一个镜像的，即：做这个操作，整个 Pod 不会重建，也不会重启，这是非常重要的一个设计。\n\n\n\n2.共享存储\n第二问题：Pod 怎么去共享存储？Pod 共享存储就相对比较简单。\n\n比如说现在有两个容器，一个是 Nginx，另外一个是非常普通的容器，在 Nginx 里放一些文件，让我能通过 Nginx 访问到。所以它需要去 share 这个目录。我 share 文件或者是 share 目录在 Pod 里面是非常简单的，实际上就是把 volume 变成了 Pod level。然后所有容器，就是所有同属于一个 Pod 的容器，他们共享所有的 volume。\n\n\n\n比如说上图的例子，这个 volume 叫做 shared-data，它是属于 Pod level 的，所以在每一个容器里可以直接声明：要挂载 shared-data 这个 volume，只要你声明了你挂载这个 volume，你在容器里去看这个目录，实际上大家看到的就是同一份。这个就是 Kubernetes 通过 Pod 来给容器共享存储的一个做法。\n\n所以在之前的例子中，应用容器 App 写了日志，只要这个日志是写在一个 volume 中，只要声明挂载了同样的 volume，这个 volume 就可以立刻被另外一个 LogCollector 容器给看到。以上就是 Pod 实现存储的方式。\n\n三、详解容器设计模式\n现在我们知道了为什么需要 Pod，也了解了 Pod 这个东西到底是怎么实现的。最后，以此为基础，详细介绍一下 Kubernetes 非常提倡的一个概念，叫做容器设计模式。\n\n举例\n接下来将会用一个例子来给大家进行讲解。\n\n比如我现在有一个非常常见的一个诉求：我现在要发布一个应用，这个应用是 JAVA 写的，有一个 WAR 包需要把它放到 Tomcat 的 web APP 目录下面，这样就可以把它启动起来了。可是像这样一个 WAR 包或 Tomcat 这样一个容器的话，怎么去做，怎么去发布？这里面有几种做法。\n\n\n\n第一种方式：可以把 WAR 包和 Tomcat 打包放进一个镜像里面。但是这样带来一个问题，就是现在这个镜像实际上揉进了两个东西。那么接下来，无论是我要更新 WAR 包还是说我要更新 Tomcat，都要重新做一个新的镜像，这是比较麻烦的；\n第二种方式：就是镜像里面只打包 Tomcat。它就是一个 Tomcat，但是需要使用数据卷的方式，比如说 hostPath，从宿主机上把 WAR 包挂载进我们 Tomcat 容器中，挂到我的 web APP 目录下面，这样把这个容器启用起来之后，里面就能用了。\n但是这时会发现一个问题：这种做法一定需要维护一套分布式存储系统。因为这个容器可能第一次启动是在宿主机 A 上面，第二次重新启动就可能跑到 B 上去了，容器它是一个可迁移的东西，它的状态是不保持的。所以必须维护一套分布式存储系统，使容器不管是在 A 还是在 B 上，都可以找到这个 WAR 包，找到这个数据。\n\n注意，即使有了分布式存储系统做 Volume，你还需要负责维护 Volume 里的 WAR 包。比如：你需要单独写一套 Kubernetes Volume 插件，用来在每次 Pod 启动之前，把应用启动所需的 WAR 包下载到这个 Volume 里，然后才能被应用挂载使用到。\n\n这样操作带来的复杂程度还是比较高的，且这个容器本身必须依赖于一套持久化的存储插件（用来管理 Volume 里的 WAR 包内容）。\n\nInitContainer\n所以大家有没有考虑过，像这样的组合方式，有没有更加通用的方法？哪怕在本地 Kubernetes 上，没有分布式存储的情况下也能用、能玩、能发布。\n\n实际上方法是有的，在 Kubernetes 里面，像这样的组合方式，叫做 Init Container。\n\n\n\n还是同样一个例子：在上图的 yaml 里，首先定义一个 Init Container，它只做一件事情，就是把 WAR 包从镜像里拷贝到一个 Volume 里面，它做完这个操作就退出了，所以 Init Container 会比用户容器先启动，并且严格按照定义顺序来依次执行。\n\n然后，这个关键在于刚刚拷贝到的这样一个目的目录：APP 目录，实际上是一个 Volume。而我们前面提到，一个 Pod 里面的多个容器，它们是可以共享 Volume 的，所以现在这个 Tomcat 容器，只是打包了一个 Tomcat 镜像。但在启动的时候，要声明使用 APP 目录作为我的 Volume，并且要把它们挂载在 Web APP 目录下面。\n\n而这个时候，由于前面已经运行过了一个 Init Container，已经执行完拷贝操作了，所以这个 Volume 里面已经存在了应用的 WAR 包：就是 sample.war，绝对已经存在这个 Volume 里面了。等到第二步执行启动这个 Tomcat 容器的时候，去挂这个 Volume，一定能在里面找到前面拷贝来的 sample.war。\n\n所以可以这样去描述：这个 Pod 就是一个自包含的，可以把这一个 Pod 在全世界任何一个 Kubernetes 上面都顺利启用起来。不用担心没有分布式存储、Volume 不是持久化的，它一定是可以公布的。\n\n所以这是一个通过组合两个不同角色的容器，并且按照这样一些像 Init Container 这样一种编排方式，统一的去打包这样一个应用，把它用 Pod 来去做的非常典型的一个例子。像这样的一个概念，在 Kubernetes 里面就是一个非常经典的容器设计模式，叫做：“Sidecar”。\n\n容器设计模式：Sidecar\n什么是 Sidecar？就是说其实在 Pod 里面，可以定义一些专门的容器，来执行主业务容器所需要的一些辅助工作，比如我们前面举的例子，其实就干了一个事儿，这个 Init Container，它就是一个 Sidecar，它只负责把镜像里的 WAR 包拷贝到共享目录里面，以便被 Tomcat 能够用起来。\n\n其它有哪些操作呢？比如说：\n\n原本需要在容器里面执行 SSH 需要干的一些事情，可以写脚本、一些前置的条件，其实都可以通过像 Init Container 或者另外像 Sidecar 的方式去解决；\n当然还有一个典型例子就是我的日志收集，日志收集本身是一个进程，是一个小容器，那么就可以把它打包进 Pod 里面去做这个收集工作；\n还有一个非常重要的东西就是 Debug 应用，实际上现在 Debug 整个应用都可以在应用 Pod 里面再次定义一个额外的小的 Container，它可以去 exec 应用 pod 的 namespace；\n查看其他容器的工作状态，这也是它可以做的事情。不再需要去 SSH 登陆到容器里去看，只要把监控组件装到额外的小容器里面就可以了，然后把它作为一个 Sidecar 启动起来，跟主业务容器进行协作，所以同样业务监控也都可以通过 Sidecar 方式来去做。\n这种做法一个非常明显的优势就是在于其实将辅助功能从我的业务容器解耦了，所以我就能够独立发布 Sidecar 容器，并且更重要的是这个能力是可以重用的，即同样的一个监控 Sidecar 或者日志 Sidecar，可以被全公司的人共用的。这就是设计模式的一个威力。\n\n\n\nSidecar：应用与日志收集\n接下来，我们再详细细化一下 Sidecar 这样一个模式，它还有一些其他的场景。\n\n比如说前面提到的应用日志收集，业务容器将日志写在一个 Volume 里面，而由于 Volume 在 Pod 里面是被共享的，所以日志容器 —— 即 Sidecar 容器一定可以通过共享该 Volume，直接把日志文件读出来，然后存到远程存储里面，或者转发到另外一个例子。现在业界常用的 Fluentd 日志进程或日志组件，基本上都是这样的工作方式。\n\n\n\nSidecar：代理容器\nSidecar 的第二个用法，可以称作为代理容器 Proxy。什么叫做代理容器呢？\n\n假如现在有个 Pod 需要访问一个外部系统，或者一些外部服务，但是这些外部系统是一个集群，那么这个时候如何通过一个统一的、简单的方式，用一个 IP 地址，就把这些集群都访问到？有一种方法就是：修改代码。因为代码里记录了这些集群的地址；另外还有一种解耦的方法，即通过 Sidecar 代理容器。\n\n简单说，单独写一个这么小的 Proxy，用来处理对接外部的服务集群，它对外暴露出来只有一个 IP 地址就可以了。所以接下来，业务容器主要访问 Proxy，然后由 Proxy 去连接这些服务集群，这里的关键在于 Pod 里面多个容器是通过 localhost 直接通信的，因为它们同属于一个 network Namespace，网络视图都一样，所以它们俩通信 localhost，并没有性能损耗。\n\n所以说代理容器除了做了解耦之外，并不会降低性能，更重要的是，像这样一个代理容器的代码就又可以被全公司重用了。\n\n\n\nSidecar：适配器容器\nSidecar 的第三个设计模式 —— 适配器容器 Adapter，什么叫 Adapter 呢？\n\n现在业务暴露出来的 API，比如说有个 API 的一个格式是 A，但是现在有一个外部系统要去访问我的业务容器，它只知道的一种格式是 API B ,所以要做一个工作，就是把业务容器怎么想办法改掉，要去改业务代码。但实际上，你可以通过一个 Adapter 帮你来做这层转换。\n\n\n\n现在有个例子：现在业务容器暴露出来的监控接口是 /metrics，访问这个这个容器的 metrics 的这个 URL 就可以拿到了。可是现在，这个监控系统升级了，它访问的 URL 是 /health，我只认得暴露出 health 健康检查的 URL，才能去做监控，metrics 不认识。那这个怎么办？那就需要改代码了，但可以不去改代码，而是额外写一个 Adapter，用来把所有对 health 的这个请求转发给 metrics 就可以了，所以这个 Adapter 对外暴露的是 health 这样一个监控的 URL，这就可以了，你的业务就又可以工作了。\n\n这样的关键还在于 Pod 之中的容器是通过 localhost 直接通信的，所以没有性能损耗，并且这样一个 Adapter 容器可以被全公司重用起来，这些都是设计模式给我们带来的好处。\n\n本节总结\nPod 是 Kubernetes 项目里实现“容器设计模式”的核心机制；\n“容器设计模式”是 Google Borg 的大规模容器集群管理最佳实践之一，也是 Kubernetes 进行复杂应用编排的基础依赖之一；\n所有“设计模式”的本质都是：解耦和重用。\n讲师点评\nPod 与容器设计模式是 Kubernetes 体系里面最重要的一个基础知识点，希望读者能够仔细揣摩和掌握。在这里，我建议你去重新审视一下之前自己公司或者团队里使用 Pod 方式，是不是或多或少采用了所谓“富容器”这种设计呢？这种设计，只是一种过渡形态，会培养出很多非常不好的运维习惯。我强烈建议你逐渐采用容器设计模式的思想对富容器进行解耦，将它们拆分成多个容器组成一个 Pod。这也正是当前阿里巴巴“全面上云”战役中正在全力推进的一项重要的工作内容。\n",
+      "data": {
+        "title": "阿里云原生公开课 - 4 - 理解Pod和容器设计模式",
+        "date": "2022-08-16 14:40:56",
+        "tags": [],
+        "published": true,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "a-li-yun-yuan-sheng-gong-kai-ke-4-li-jie-pod-he-rong-qi-she-ji-mo-shi"
+    },
+    {
+      "content": "本文整理自 CNCF 和阿里巴巴联合举办的云原生技术公开课的课时 3：Kubernetes 核心概念。本次课程中，阿里巴巴资深技术专家、CNCF 9个 TCO 之一 李响为大家介绍了 Kubernetes 的主要功能与能力、Kubernetes 的架构以及其核心概念与核心 API 等，精彩不容错过。\n\n本次课程的分享主要围绕以下 3 个部分：\n\n什么是 Kubernetes ：介绍 Kubernetes 的主要功能以及能力；\nKubernetes 的架构：介绍 Kubernetes 的核心组件，以及介绍它们之间是如何相互互动连接；\nKubernetes 的核心概念与核心 API；\n一、什么是 Kubernetes\nKubernetes，从官方网站上可以看到，它是一个工业级的容器编排平台。Kubernetes 这个单词是希腊语，它的中文翻译是“舵手”或者“飞行员”。在一些常见的资料中也会看到“ks”这个词，也就是“k8s”，它是通过将8个字母“ubernete ”替换为“8”而导致的一个缩写。\n\nKubernetes 为什么要用“舵手”来命名呢？大家可以看一下这张图：\n\n\n\n这是一艘载着一堆集装箱的轮船，轮船在大海上运着集装箱奔波，把集装箱送到它们该去的地方。我们之前其实介绍过一个概念叫做 container，container 这个英文单词也有另外的一个意思就是“集装箱”。Kubernetes 也就借着这个寓意，希望成为运送集装箱的一个轮船，来帮助我们管理这些集装箱，也就是管理这些容器。\n\n这个就是为什么会选用 Kubernetes 这个词来代表这个项目的原因。更具体一点地来说：Kubernetes 是一个自动化的容器编排平台，它负责应用的部署、应用的弹性以及应用的管理，这些都是基于容器的。\n\n二、Kubernetes 有如下几个核心的功能：\n服务的发现与负载的均衡；\n容器的自动装箱，我们也会把它叫做 scheduling，就是“调度”，把一个容器放到一个集群的某一个机器上，Kubernetes 会帮助我们去做存储的编排，让存储的声明周期与容器的生命周期能有一个连接；\nKubernetes 会帮助我们去做自动化的容器的恢复。在一个集群中，经常会出现宿主机的问题或者说是 OS 的问题，导致容器本身的不可用，Kubernetes 会自动地对这些不可用的容器进行恢复；\nKubernetes 会帮助我们去做应用的自动发布与应用的回滚，以及与应用相关的配置密文的管理；\n对于 job 类型任务，Kubernetes 可以去做批量的执行；\n为了让这个集群、这个应用更富有弹性，Kubernetes 也支持水平的伸缩。\n下面，我们希望以三个例子跟大家更切实地介绍一下 Kubernetes 的能力。\n\n1、调度\nKubernetes 可以把用户提交的容器放到 Kubernetes 管理的集群的某一台节点上去。Kubernetes 的调度器是执行这项能力的组件，它会观察正在被调度的这个容器的大小、规格。\n\n比如说它所需要的 CPU以及它所需要的 memory，然后在集群中找一台相对比较空闲的机器来进行一次 placement，也就是一次放置的操作。在这个例子中，它可能会把红颜色的这个容器放置到第二个空闲的机器上，来完成一次调度的工作。\n\n\n\n2、自动修复\nKubernetes 有一个节点健康检查的功能，它会监测这个集群中所有的宿主机，当宿主机本身出现故障，或者软件出现故障的时候，这个节点健康检查会自动对它进行发现。\n\n下面 Kubernetes 会把运行在这些失败节点上的容器进行自动迁移，迁移到一个正在健康运行的宿主机上，来完成集群内容器的一个自动恢复。\n\n\n\n\n\n3、水平伸缩\nKubernetes 有业务负载检查的能力，它会监测业务上所承担的负载，如果这个业务本身的 CPU 利用率过高，或者响应时间过长，它可以对这个业务进行一次扩容。\n\n比如说在下面的例子中，黄颜色的过度忙碌，Kubernetes 就可以把黄颜色负载从一份变为三份。接下来，它就可以通过负载均衡把原来打到第一个黄颜色上的负载平均分到三个黄颜色的负载上去，以此来提高响应的时间。\n\n\n\n\n\n以上就是 Kubernetes 三个核心能力的简单介绍。\n\n三、Kubernetes 的架构\nKubernetes 架构是一个比较典型的二层架构和 server-client 架构。Master 作为中央的管控节点，会去与 Node 进行一个连接。\n\n所有 UI 的、clients、这些 user 侧的组件，只会和 Master 进行连接，把希望的状态或者想执行的命令下发给 Master，Master 会把这些命令或者状态下发给相应的节点，进行最终的执行。\n\n\n\nKubernetes 的 Master 包含四个主要的组件：API Server、Controller、Scheduler 以及 etcd。如下图所示：\n\n\n\nAPI Server：顾名思义是用来处理 API 操作的，Kubernetes 中所有的组件都会和 API Server 进行连接，组件与组件之间一般不进行独立的连接，都依赖于 API Server 进行消息的传送；\nController：是控制器，它用来完成对集群状态的一些管理。比如刚刚我们提到的两个例子之中，第一个自动对容器进行修复、第二个自动进行水平扩张，都是由 Kubernetes 中的 Controller 来进行完成的；\nScheduler：是调度器，“调度器”顾名思义就是完成调度的操作，就是我们刚才介绍的第一个例子中，把一个用户提交的 Container，依据它对 CPU、对 memory 请求大小，找一台合适的节点，进行放置；\netcd：是一个分布式的一个存储系统，API Server 中所需要的这些原信息都被放置在 etcd 中，etcd 本身是一个高可用系统，通过 etcd 保证整个 Kubernetes 的 Master 组件的高可用性。\n我们刚刚提到的 API Server，它本身在部署结构上是一个可以水平扩展的一个部署组件；Controller 是一个可以进行热备的一个部署组件，它只有一个 active，它的调度器也是相应的，虽然只有一个 active，但是可以进行热备。\n\nKubernetes 的架构：Node\nKubernetes 的 Node 是真正运行业务负载的，每个业务负载会以 Pod 的形式运行。等一下我会介绍一下 Pod 的概念。一个 Pod 中运行的一个或者多个容器，真正去运行这些 Pod 的组件的是叫做 kubelet，也就是 Node 上最为关键的组件，它通过 API Server 接收到所需要 Pod 运行的状态，然后提交到我们下面画的这个 Container Runtime 组件中。\n\n\n\n在 OS 上去创建容器所需要运行的环境，最终把容器或者 Pod 运行起来，也需要对存储跟网络进行管理。Kubernetes 并不会直接进行网络存储的操作，他们会靠 Storage Plugin 或者是网络的 Plugin 来进行操作。用户自己或者云厂商都会去写相应的 Storage Plugin 或者 Network Plugin，去完成存储操作或网络操作。\n\n在 Kubernetes 自己的环境中，也会有 Kubernetes 的 Network，它是为了提供 Service network 来进行搭网组网的。（等一下我们也会去介绍“service”这个概念。）真正完成 service 组网的组件的是 Kube-proxy，它是利用了 iptable 的能力来进行组建 Kubernetes 的 Network，就是 cluster network，以上就是 Node 上面的四个组件。\n\nKubernetes 的 Node 并不会直接和 user 进行 interaction，它的 interaction 只会通过 Master。而 User 是通过 Master 向节点下发这些信息的。Kubernetes 每个 Node 上，都会运行我们刚才提到的这几个组件。\n\n下面我们以一个例子再去看一下 Kubernetes 架构中的这些组件，是如何互相进行 interaction 的。\n\n\n\n用户可以通过 UI 或者 CLI 提交一个 Pod 给 Kubernetes 进行部署，这个 Pod 请求首先会通过 CLI 或者 UI 提交给 Kubernetes API Server，下一步 API Server 会把这个信息写入到它的存储系统 etcd，之后 Scheduler 会通过 API Server 的 watch 或者叫做 notification 机制得到这个信息：有一个 Pod 需要被调度。\n\n这个时候 Scheduler 会根据它的内存状态进行一次调度决策，在完成这次调度之后，它会向 API Server report 说：“OK！这个 Pod 需要被调度到某一个节点上。”\n\n这个时候 API Server 接收到这次操作之后，会把这次的结果再次写到 etcd 中，然后 API Server 会通知相应的节点进行这次 Pod 真正的执行启动。相应节点的 kubelet 会得到这个通知，kubelet 就会去调 Container runtime 来真正去启动配置这个容器和这个容器的运行环境，去调度 Storage Plugin 来去配置存储，network Plugin 去配置网络。\n\n这个例子我们可以看到：这些组件之间是如何相互沟通相互通信，协调来完成一次Pod的调度执行操作的。\n\n四、Kubernetes 的核心概念与它的 API\n核心概念\n第一个概念：Pod\nPod 是 Kubernetes 的一个最小调度以及资源单元。用户可以通过 Kubernetes 的 Pod API 生产一个 Pod，让 Kubernetes 对这个 Pod 进行调度，也就是把它放在某一个 Kubernetes 管理的节点上运行起来。一个 Pod 简单来说是对一组容器的抽象，它里面会包含一个或多个容器。\n\n比如像下面的这幅图里面，它包含了两个容器，每个容器可以指定它所需要资源大小。比如说，一个核一个 G，或者说 0.5 个核，0.5 个 G。\n\n当然在这个 Pod 中也可以包含一些其他所需要的资源：比如说我们所看到的 Volume 卷这个存储资源；比如说我们需要 100 个 GB 的存储或者 20GB 的另外一个存储。\n\n\n\n在 Pod 里面，我们也可以去定义容器所需要运行的方式。比如说运行容器的 Command，以及运行容器的环境变量等等。Pod 这个抽象也给这些容器提供了一个共享的运行环境，它们会共享同一个网络环境，这些容器可以用 localhost 来进行直接的连接。而 Pod 与 Pod 之间，是互相有 isolation 隔离的。\n\n第二个概念：Volume\nVolume 就是卷的概念，它是用来管理 Kubernetes 存储的，是用来声明在 Pod 中的容器可以访问文件目录的，一个卷可以被挂载在 Pod 中一个或者多个容器的指定路径下面。\n\n而 Volume 本身是一个抽象的概念，一个 Volume 可以去支持多种的后端的存储。比如说 Kubernetes 的 Volume 就支持了很多存储插件，它可以支持本地的存储，可以支持分布式的存储，比如说像 ceph，GlusterFS ；它也可以支持云存储，比如说阿里云上的云盘、AWS 上的云盘、Google 上的云盘等等。\n\n\n\n第三个概念：Deployment\nDeployment 是在 Pod 这个抽象上更为上层的一个抽象，它可以定义一组 Pod 的副本数目、以及这个 Pod 的版本。一般大家用 Deployment 这个抽象来做应用的真正的管理，而 Pod 是组成 Deployment 最小的单元。\n\nKubernetes 是通过 Controller，也就是我们刚才提到的控制器去维护 Deployment 中 Pod 的数目，它也会去帮助 Deployment 自动恢复失败的 Pod。\n\n比如说我可以定义一个 Deployment，这个 Deployment 里面需要两个 Pod，当一个 Pod 失败的时候，控制器就会监测到，它重新把 Deployment 中的 Pod 数目从一个恢复到两个，通过再去新生成一个 Pod。通过控制器，我们也会帮助完成发布的策略。比如说进行滚动升级，进行重新生成的升级，或者进行版本的回滚。\n\n\n\n第四个概念：Service\nService 提供了一个或者多个 Pod 实例的稳定访问地址。\n\n比如在上面的例子中，我们看到：一个 Deployment 可能有两个甚至更多个完全相同的 Pod。对于一个外部的用户来讲，访问哪个 Pod 其实都是一样的，所以它希望做一次负载均衡，在做负载均衡的同时，我只想访问某一个固定的 VIP，也就是 Virtual IP 地址，而不希望得知每一个具体的 Pod 的 IP 地址。\n\n我们刚才提到，这个 pod 本身可能 terminal go（终止），如果一个 Pod 失败了，可能会换成另外一个新的。\n\n对一个外部用户来讲，提供了多个具体的 Pod 地址，这个用户要不停地去更新 Pod 地址，当这个 Pod 再失败重启之后，我们希望有一个抽象，把所有 Pod 的访问能力抽象成一个第三方的一个 IP 地址，实现这个的 Kubernetes 的抽象就叫 Service。\n\n实现 Service 有多种方式，Kubernetes 支持 Cluster IP，上面我们讲过的 kuber-proxy 的组网，它也支持 nodePort、 LoadBalancer 等其他的一些访问的能力。\n\n\n\n第五个概念：Namespace\nNamespace 是用来做一个集群内部的逻辑隔离的，它包括鉴权、资源管理等。Kubernetes 的每个资源，比如刚才讲的 Pod、Deployment、Service 都属于一个 Namespace，同一个 Namespace 中的资源需要命名的唯一性，不同的 Namespace 中的资源可以重名。\n\nNamespace 一个用例，比如像在阿里巴巴，我们内部会有很多个 business units，在每一个 business units 之间，希望有一个视图上的隔离，并且在鉴权上也不一样，在 cuda 上面也不一样，我们就会用 Namespace 来去给每一个 BU 提供一个他所看到的这么一个看到的隔离的机制。\n\n\n\nKubernetes 的 API\n下面我们介绍一下 Kubernetes 的 API 的基础知识。从 high-level 上看，Kubernetes API 是由 HTTP+JSON 组成的：用户访问的方式是 HTTP，访问的 API 中 content 的内容是 JSON 格式的。\n\nKubernetes 的 kubectl 也就是 command tool，Kubernetes UI，或者有时候用 curl，直接与 Kubernetes 进行沟通，都是使用 HTTP + JSON 这种形式。\n\n下面有个例子：比如说，对于这个 Pod 类型的资源，它的 HTTP 访问的路径，就是 API，然后是 apiVesion: V1, 之后是相应的 Namespaces，以及 Pods 资源，最终是 Podname，也就是 Pod 的名字。\n\n\n\n如果我们去提交一个 Pod，或者 get 一个 Pod 的时候，它的 content 内容都是用 JSON 或者是 YAML 表达的。上图中有个 yaml 的例子，在这个 yaml file 中，对 Pod 资源的描述也分为几个部分。\n\n第一个部分，一般来讲会是 API 的 version。比如在这个例子中是 V1，它也会描述我在操作哪个资源；比如说我的 kind 如果是 pod，在 Metadata 中，就写上这个 Pod 的名字；比如说 nginx，我们也会给它打一些 label，我们等下会讲到 label 的概念。在 Metadata 中，有时候也会去写 annotation，也就是对资源的额外的一些用户层次的描述。\n\n比较重要的一个部分叫做 Spec，Spec 也就是我们希望 Pod 达到的一个预期的状态。比如说它内部需要有哪些 container 被运行；比如说这里面有一个 nginx 的 container，它的 image 是什么？它暴露的 port 是什么？\n\n当我们从 Kubernetes API 中去获取这个资源的时候，一般来讲在 Spec 下面会有一个项目叫 status，它表达了这个资源当前的状态；比如说一个 Pod 的状态可能是正在被调度、或者是已经 running、或者是已经被 terminates，就是被执行完毕了。\n\n刚刚在 API 之中，我们讲了一个比较有意思的 metadata 叫做“label”，这个 label 可以是一组 KeyValuePair。\n\n比如下图的第一个 pod 中，label 就可能是一个 color 等于 red，即它的颜色是红颜色。当然你也可以加其他 label，比如说 size: big 就是大小，定义为大的，它可以是一组 label。\n\n这些 label 是可以被 selector，也就是选择器所查询的。这个能力实际上跟我们的 sql 类型的 select 语句是非常相似的，比如下图中的三个 Pod 资源中，我们就可以进行 select。name color 等于 red，就是它的颜色是红色的，我们也可以看到，只有两个被选中了，因为只有他们的 label 是红色的，另外一个 label 中写的 color 等于 yellow，也就是它的颜色是黄色，是不会被选中的。\n\n\n\n通过 label，kubernetes 的 API 层就可以对这些资源进行一个筛选，那这些筛选也是 kubernetes 对资源的集合所表达默认的一种方式。\n\n例如说，我们刚刚介绍的 Deployment，它可能是代表一组的 Pod，它是一组 Pod 的抽象，一组 Pod 就是通过 label selector 来表达的。当然我们刚才讲到说 service 对应的一组 Pod，就是一个 service 要对应一个或者多个的 Pod，来对它们进行统一的访问，这个描述也是通过 label selector 来进行 select 选取的一组 Pod。\n\n所以可以看到 label 是一个非常核心的 kubernetes API 的概念，我们在接下来的课程中也会着重地去讲解和介绍 label 这个概念，以及如何更好地去使用它。\n\n五、以一个 demo 结尾\n最后一部分，我想以一个例子来结束，让大家跟我一起来尝试一个 kubernetes，在尝试 Kubernetes 之前，我希望大家能在本机上安装一下 Kubernetes，安装一个 Kubernetes 沙箱环境。\n\n安装这个沙箱环境，主要有三个步骤：\n\n首先需要安装一个虚拟机，来在虚拟机中启动 Kubernetes。我们会推荐大家利用 virtualbox 来作为虚拟机的运行环境；\n安装 VirtualBox： https://www.virtualbox.org/wiki/Downloads\n\n其次我们需要在虚拟机中启动 Kubernetes，Kubernetes 有一个非常有意思的项目，叫 minikube，也就是启动一个最小的 local 的 Kubernetes 的一个环境。\nminikube 我们推荐使用下面写到的阿里云的版本，它和官方 minikube 的主要区别就是把 minikube 中所需要的 Google 上的依赖换成国内访问比较快的一些镜像，这样就方便了大家的安装工作；\n\n安装 MiniKube（中国版）: https://yq.aliyun.com/articles/221687\n\n最后在安装完 virtualbox 和 minikube 之后，大家可以对 minikube 进行启动，也就是下面这个命令。\n启动命令：minikube start —vm-driver virtualbox\n\n如果大家不是 Mac 系统，其他操作系统请访问下面这个链接，查看其它操作系统如何安装 minikube 沙箱环境。\n\nhttps://kubernetes.io/docs/tasks/tools/install-minikube/\n\n当大家安装好之后，我会跟大家一起做一个例子，来做三件事情：\n\n提交一个 nginx deployment；\nkubectl apply -f https://k8s.io/examples/application/deployment.yaml\n\n升级 nginx deployment；\nkubectl apply -f https://k8s.io/examples/application/deployment-update.yaml\n\n扩容 nginx deployment。\nkubectl apply -f https://k8s.io/examples/application/deployment-scale.yaml\n\n第一步，我们提交一个 nginx 的 Deployment，然后对这个 Deployment 进行一次版本升级，也就是改变它中间 Pod 的版本。最后我们也会尝试对 nginx 进行一次扩容，进行一次水平的伸缩，下面就让大家一起跟我来尝试这三个操作吧。\n\n首先，我们先看一下 minikube 的 status，可以看到 kubelet master 和 kubectl 都是配置好的。\n\n\n\n下一步我们利用 kubectl 来看一下这个集群中节选的状态，可以看到这个master 的节点已经是running状态：\n\n\n\n我们就以这个为节点，下面我们尝试去看一下现在集群中 Deployment 这个资源：\n\n\n\n可以看到集群中没有任何的 Deployment，我们可以利用 watch 这个语义去看集群中 Deployment 这个资源的变化情况。\n\n下面我们去做刚才想要的三个操作：第一个操作是去创建一个 Deployment。可以看到下面第一个图，这是一个 API 的 content，它的 kind 是 Deployment，name 是 nginx-deployment, 有图中它的 replicas 数目是2，它的镜像版本是 1.7.9。\n\n\n\n我们下面还是回到 kubectl 这个 commnd 来执行这次 Deployment 的真正的操作。我们可以看到一个简单的操作，就会去让 Deployment 不停地生成副本。\n\n\n\nDeployment 副本数目是 2 个，下面也可以 describe 一下现在的 Deployment 的状态。我们知道之前是没有这个 Deployment 的，现在我们去 describe 这个 nginx-deployment。\n\n下图中可以看到：有一个 nginx-deployment 已经被生成了，它的 replicas 数目也是我们想要的、selector 也是我们想要的、它的 image 的版本也是 1.7.9。还可以看到，里面的 deployment-controller 这种版本控制器也是在管理它的生成。\n\n\n\n下面我们去升级这个 Deployment 版本，首先下载另外一个 yaml 文件 deployment-update.yaml，可以看到这里面的 image 本身的版本号从 1.7.9 升级到 1.8。\n\n\n\n接下来我们重新 apply 新的 deployment-update 这个 yaml 文件。\n\n可以看到，在另一边的屏幕上显示出了这个 Deployment 升级的一些操作，最终它的 up-to-date 值从 0 变成了 2，也就是说所有的容器都是最新版本的，所有的 Pod 都是最新版本的。我们也可以 discribe 具体去看一下是不是所有 Pod 的版本都被更新了，可以看到这个 image 的版本由 1.7.9 真正更新到了 1.8。\n\n最后，我们也可以看到 controller 又执行了几次新的操作，这个控制器维护了整个 Deployment 和 Pod 状态。\n\n\n\n最后我们演示一下给 Deployment 做水平扩张，下载另一个 yaml 文件 deployment-scale.yaml，这里面的 replicas 数目已经从 2 改成了 4。\n\n\n\n回到最开始的窗口，用 kubectl 去 apply 这个新的 deployment-scale.yaml 文件，在另外一个窗口上可以看到，当我们执行了 deployment-scale 操作之后，它的容器 Pod 数目从 2 变成了 4。我们可以再一次 describ 一下当前集群中的 deployment 的情况，可以看到它的 replicas 的数目从 2 变到了 4，同时也可以看到 controller 又做了几次新的操作，这个 scale up 成功了。\n\n\n\n最后，让我们利用 delete 操作把我们刚才生成的 Deployment 给删除掉。kubectl delete deployment，也是刚才我们本身的 deployment name，当我们把它删除掉之后，我们今天所有的操作就完成了。\n\n我们再去重新 get 这个 Deployment，也会显示这个资源不再存在，这个集群又回到了最开始干净的状态。\n\n\n\n以上这就是这堂课中所有的内容了，我们关注了 kubernetes 的核心概念以及 kubernetes 的架构设计，希望大家能在这节课中有所收获，也希望大家能关注云原生技术课堂中的其他内容，谢谢大家的观看！\n\n本节总结\nKubernetes 是一个自动化的容器编排平台，它负责应用的部署、应用的弹性以及应用的管理，这些都是基于容器的；\nKubernetes 架构是一个比较典型的二层架构和 server-client 架构；",
+      "data": {
+        "title": "阿里云公开课 - Kubernetes 核心概念",
+        "date": "2022-08-16 13:18:17",
+        "tags": [],
+        "published": true,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "a-li-yun-gong-kai-ke-kubernetes-he-xin-gai-nian"
+    },
+    {
+      "content": "\n\ncanonical interview question\nhttps://www.glassdoor.com/Interview/How-did-you-fare-in-high-school-mathematics-physical-sciences-and-computing-Which-were-your-strengths-and-which-most-enjo-QTN_5607403.htm",
+      "data": {
+        "title": "带薪找工作 - 1 - canonical",
+        "date": "2022-08-08 11:30:27",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "dai-xin-zhao-gong-zuo-1-canonical"
+    },
+    {
+      "content": "edge 普通用词，指较窄的边沿。\nborder 侧重刚好在界线内的一部分表面上，指较宽的边缘，也可指边缘本身。\nmargin 指物体的空白边，一般较宽。\nrim 指圆形或有曲线的物体的边缘。\nverge 指明显地标志一个表在或一广阔空间的边界，或终端线，也指极狭窄的空间。常用作比喻。\nbrim 指深容器的内边或河、湖等水域的最高线。\nfringe 指地毯的须边、围巾的花边、烫发的卷边或人群的边缘。",
+      "data": {
+        "title": "word-war",
+        "date": "2022-07-25 09:57:29",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "word-war"
+    },
+    {
+      "content": "https://cloud-atlas.readthedocs.io/zh_CN/latest/kubernetes/index.html",
+      "data": {
+        "title": "cloud atlas - k8s atlas",
+        "date": "2022-07-23 19:25:38",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "cloud-atlas-k8s-atlas"
+    },
+    {
+      "content": "https://blog.csdn.net/shenhaifeiniao/article/details/69397000",
+      "data": {
+        "title": "mac 配置虚拟机",
+        "date": "2022-07-23 19:23:35",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "mac-pei-zhi-xu-ni-ji"
+    },
+    {
+      "content": "\n## 失业危机解除\n\n\n## 重操旧业 \n\n## 学习资源\n\n## Spark 开发者使用\n学习真实项目\n\n## Spark 资源调度\n基于Yarn\n基于Mesos\n基于Kubernetes\n\n## Python\npyspark\n\n## 基于 kubernetes 构建数据科学系统\n\n## Volcano 高性能架构调度的未来\n\n\n\nhttps://xbeibeix.com/api/bilibili/\n\n\nhttps://wilsonmar.github.io/maven-on-macos/\n\n\nhttps://mvnrepository.com/\n\nJava 技能树\nhttps://edu.csdn.net/skill/java/java-66561dccfcfc4dbba2ff57b11d548146",
+      "data": {
+        "title": "机器学习数据工程与系统",
+        "date": "2022-07-21 21:26:53",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "xin-gong-zuo"
+    },
+    {
+      "content": "https://blog.csdn.net/dream_summer/article/details/110822636",
+      "data": {
+        "title": "Markdown 表格实用技巧",
+        "date": "2022-07-11 19:53:09",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "markdown-biao-ge-shi-yong-ji-qiao"
+    },
+    {
+      "content": "| Weekly | 英语学习 | XWG单词 | 复习 | 考虫单词 | 复习 \n| :------| :------:| :------: | :------: | :------: | :------: | \n| __7.11__ | ✅ | ❌ | ✅ | ❌ |✅ | \n| __7.12__ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n| __7.13__ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n| __7.14__ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n| __7.15__ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n| _7.16_ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n| _7.17_ | 单元格 | 单元格 |单元格 | 单元格 |单元格 | \n\n# follow-up\n- cess\n    - 浪费时间在韦小绿里面找没有找到\n    - > 需要整理到规定 不能无限扩展\n    - bili 有cess的讲解\n- cis\n    - \n\n",
+      "data": {
+        "title": "打卡篇",
+        "date": "2022-07-11 19:06:08",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "da-qia-pian"
+    },
+    {
+      "content": "https://zhuanlan.zhihu.com/p/24770644\nPPT 版本\nhttp://www.norvig.com/Gettysburg/sld001.htm\n",
+      "data": {
+        "title": "葛底斯堡演讲",
+        "date": "2022-07-11 17:23:02",
+        "tags": [],
+        "published": false,
+        "hideInList": false,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "ge-di-si-bao-yan-jiang"
+    },
+    {
+      "content": "👏  最慢的路径\n✍️  不可能的挑战\n... \n\n<!-- more -->\n\n[Github](https://github.com/getgridea/gridea)  \n[Gridea 主页](https://gridea.dev/)  \n[示例网站](https://fehey.com/)\n\n## 引子\n如果问如何最快考到心仪的雅思分数，有各种各样的信息，总结下来一般是花很多钱，报一个靠谱的雅思机构，接受几个月的集中训练，就可以达到了。这些机构有大有小，各有所长，可以通过对雅思考试的了解帮助考生在英语水平没有明显提升的情况下达到较高的分数。\n\n如果一个已经工作的人，年龄不小，英语并不非常好，不知道自己需要多久才能考到合适的分数呢？如果他（或她）知道移民已经太卷，考了很高的雅思成绩也未必能排的到呢？如果他（或她）经济条件并不够好，必须要保住现有的工作而不能辞职准备呢？如果他（或她）所在行业又累又不景气，不能占用太多时间呢？\n\n## 解决问题\n- 首次考雅思，四门课都要准备\n- 目标不明确，不想影响当前的生活\n- 随缘备考，考多少分也未必能达到下一步\n- 工作比较忙，没有大量时间冲刺学习\n- 希望以一定速度坚持，不要放弃\n- 希望学习内容反馈到工作\n\n## 雅思计划\n- Round 1\n    - NGSL\n    - 同义替换\n- 单词篇\n- 听力篇\n- 阅读篇\n- 写作篇\n- 口语篇",
+      "data": {
+        "title": "如何最慢考到心仪的雅思分数",
+        "date": "2022-07-11 16:31:04",
+        "tags": [
+          "IELTS"
+        ],
+        "published": true,
+        "hideInList": false,
+        "feature": "https://images.pexels.com/photos/11743021/pexels-photo-11743021.jpeg?cs=srgb&dl=pexels-damian-11743021.jpg&fm=jpg",
+        "isTop": true
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "👏  最慢的路径\n✍️  不可能的挑战\n... ",
+      "fileName": "how-to-pass-ielts-most-slow"
+    },
+    {
+      "content": "\n# 图片下载网站\n目前正在用\n- [Pexels](https://www.pexels.com/)\n- 专用图片\n    - [水果图库](https://naldc.nal.usda.gov/usda_pomological_watercolor?page=4&q=&search_field=all_fields)\n\n# 图片搜索工作流\n- Toby 中创建 blog space\n- 将常用搜图网站加载到 collection\n- 优先使用 link 即可访问的图片\n\n# Markdown 写作工具\n- Typoa ？\n- Obsidian\n    - 双向链接此处其实增加了麻烦\n    - ob 插件的语法Markdown不兼容\n\n# 域名\n- [域名在线工具](https://zhuanlan.zhihu.com/p/259349066)\n\n\n- References:\n    - [有哪些高质量的图片网站（社区）推荐？](https://www.zhihu.com/question/19619335/answer/160341786)\n",
+      "data": {
+        "title": "博客写作工具箱",
+        "date": "2022-07-11 15:17:28",
+        "tags": [
+          "blog-skill"
+        ],
+        "published": true,
+        "hideInList": false,
+        "feature": "https://images.pexels.com/photos/4588428/pexels-photo-4588428.jpeg?cs=srgb&dl=pexels-anna-shvets-4588428.jpg&fm=jpg",
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "toolbox-for-blog"
+    },
+    {
+      "content": "\n\n# 给自己写说明书\n自己架设博客的工作流是比较复杂的，相信在写作过程中也会不断的迭代升级，为了防止遗忘，建立升级的baseline，还是决定给自己写一篇继续写作的指南。\n\n# 解决的问题\n- 写作与发布的快速试错与迭代\n- 写作与博客分离  \n    - Bluehost 中 WordPress 主题不好编辑\n    - 使用简单的 Markdown 风格\n\n# 建站过程\n- 参考链接 https://www.zhihu.com/search?type=content&q=%E5%8D%9A%E5%AE%A2%20gridea\n- 创建 username.github.io repo \n- Gridea 配置github repo 连接\n- markdown 写博客\n    - essieplus.github.io/posts\n- 主题的替换\n    - 官方主题商店\n        - https://gridea.dev/themes/\n    - 导入 essieplus.github.io/themes\n  \n# 下一步\n- 学英语的打卡贴\n- obsidian的使用贴\n- 图片工具\n    - current：直接引用link\n    - 图片在github管理 \n        - https://zhuanlan.zhihu.com/p/138012354    \n- 留言工具\n    - [Gitalk 配置](https://zhuanlan.zhihu.com/p/258592325)\n- 向其他框架迁移\n    - 仍然是 markdown\n    - 更好控制的框架\n",
+      "data": {
+        "title": "个人向-博客写作指南",
+        "date": "2022-07-11 13:57:05",
+        "tags": [
+          "blog-skill"
+        ],
+        "published": true,
+        "hideInList": false,
+        "feature": "https://images.pexels.com/photos/4027658/pexels-photo-4027658.jpeg?cs=srgb&dl=pexels-joshua-miranda-4027658.jpg&fm=jpg",
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "blog-guideline-for-myself"
+    },
+    {
+      "content": "> 欢迎来到我的小站呀，很高兴遇见你！🤝\n\n## 🏠 关于本站\n\n## 👨‍💻 博主是谁\n\n## ⛹ 兴趣爱好\n\n## 📬 联系我呀\n",
+      "data": {
+        "title": "关于",
+        "date": "2019-01-25 19:09:48",
+        "tags": null,
+        "published": true,
+        "hideInList": true,
+        "feature": null,
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "",
+      "fileName": "about"
+    },
+    {
+      "content": "👏  欢迎使用 **Gridea** ！  \n✍️  **Gridea** 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ... \n\n<!-- more -->\n\n[Github](https://github.com/getgridea/gridea)  \n[Gridea 主页](https://gridea.dev/)  \n[示例网站](https://fehey.com/)\n\n## 特性👇\n📝  你可以使用最酷的 **Markdown** 语法，进行快速创作  \n\n🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片  \n\n🏷️  你可以对文章进行标签分组  \n\n📋  你可以自定义菜单，甚至可以创建外部链接菜单  \n\n💻  你可以在 **Windows**，**MacOS** 或 **Linux** 设备上使用此客户端  \n\n🌎  你可以使用 **𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌** 或 **Coding Pages** 向世界展示，未来将支持更多平台  \n\n💬  你可以进行简单的配置，接入 [Gitalk](https://github.com/gitalk/gitalk) 或 [DisqusJS](https://github.com/SukkaW/DisqusJS) 评论系统  \n\n🇬🇧  你可以使用**中文简体**或**英语**  \n\n🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力  \n\n🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步  \n\n🌱 当然 **Gridea** 还很年轻，有很多不足，但请相信，它会不停向前 🏃\n\n未来，它一定会成为你离不开的伙伴\n\n尽情发挥你的才华吧！\n\n😘 Enjoy~\n",
+      "data": {
+        "title": "Hello Gridea",
+        "date": "2018-12-12 00:00:00",
+        "tags": [
+          "Gridea"
+        ],
+        "published": true,
+        "hideInList": false,
+        "feature": "/post-images/hello-gridea.png",
+        "isTop": false
+      },
+      "isEmpty": false,
+      "excerpt": "",
+      "abstract": "👏  欢迎使用 **Gridea** ！  \n✍️  **Gridea** 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ... ",
+      "fileName": "hello-gridea"
+    }
+  ],
+  "tags": [
+    {
+      "index": -1,
+      "name": "IELTS",
+      "slug": "ielts",
+      "used": true
+    },
+    {
+      "index": -1,
+      "name": "blog-skill",
+      "slug": "blog-skill",
+      "used": true
+    },
+    {
+      "name": "Gridea",
+      "slug": "ZgG70bgpt",
+      "used": true
+    },
+    {
+      "index": -1,
+      "name": "English-HP",
+      "slug": "english-hp",
+      "used": false
+    }
+  ],
+  "menus": [
+    {
+      "link": "/",
+      "name": "首页",
+      "openType": "Internal"
+    },
+    {
+      "link": "/archives",
+      "name": "归档",
+      "openType": "Internal"
+    },
+    {
+      "link": "/tags",
+      "name": "标签",
+      "openType": "Internal"
+    },
+    {
+      "link": "/post/about",
+      "name": "关于",
+      "openType": "Internal"
+    }
+  ]
+}
